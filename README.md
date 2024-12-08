@@ -28,6 +28,8 @@ set {row] {column} {mines}, row*column > num
 僅host可用，還沒準備玩家和新玩家設為觀戰  
 start
 ## 輪到玩家時指令
+### 標記、取消標記
+flag {row} {col}
 ### 偷竊
 偷其他玩家道具: steal {Another player’s name} {Item name}
 ### 透視
