@@ -9,7 +9,7 @@
 #include <sys/wait.h>
 #include <unp.h>
 
-#define BACKLOG 10     // Maximum number of pending connections
+#define BACKLOG 1024     // Maximum number of pending connections
 #define BUF_SIZE 1024  // Buffer size for messages
 #define MAX_CLIENTS 4 // Maximum number of clients
 
@@ -36,6 +36,13 @@ char full_message[] = "This room is full, please try another room number\n";
 pthread_mutex_t client_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int main() {
+    for(int  i=0;i<1000;i++)
+    {
+        for(int j=0;j<MAX_CLIENTS;j++)
+        {
+            strcpy(name[i][j],"");
+        }
+    }
     int listen_fd, client_fd;
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_len = sizeof(client_addr);
@@ -120,14 +127,12 @@ void *handle_client(void *arg) {
 
             pthread_mutex_lock(&client_mutex);
             printf("Client %s disconnected\n", player_name);
-
+            nth_player = find_nth(room_num,client_fd);
             // Close client connection and remove from pool
             close(client_fd);
             if(room_num!=-1)
             {
-                client_pool[room_num][nth_player]=0;
-                strcpy(name[room_num][nth_player],"");
-                leaving_broadcast(room_num,nth_player);
+                leave_broadcast(room_num,nth_player);
                 room_num = -1;
                 nth_player = -1;
             }
@@ -218,6 +223,7 @@ void *handle_client(void *arg) {
                     else
                     {
                         empty_flag=1;
+                        full_flag = 1;
                         for(int i=0;i<MAX_CLIENTS;i++)
                         {
                             if(client_pool[room_num][i]!=0)
@@ -293,7 +299,7 @@ void enter_broadcast(int room_num,int assign_num)
     pthread_mutex_lock(&client_mutex);
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (i != assign_num && client_pool[room_num][i] != 0) {
-            snprintf(sendline, BUF_SIZE, "(#%d user %s enters)\n",
+            snprintf(sendline, BUF_SIZE, "(Player #%d %s enters)\n",
                      assign_num + 1, name[room_num][assign_num]);
             send(client_pool[room_num][i], sendline, strlen(sendline), 0);
         }
@@ -301,9 +307,53 @@ void enter_broadcast(int room_num,int assign_num)
     pthread_mutex_unlock(&client_mutex);
 }
 
-void leaving_broadcast(int room_num,int nth)
+void leave_broadcast(int room_num,int nth)
 {
-
+    char message[BUF_SIZE];
+    char leave_name[BUF_SIZE];
+    strcpy(leave_name,name[room_num][nth]);
+    if(nth == 0)
+    {
+        if(client_pool[room_num][1]!=0)
+        {
+            snprintf(message,BUF_SIZE,"The host(%s) left the room.\nYou are the new host(#1) now.\n",leave_name);
+            send(client_pool[room_num][1],message,strlen(message),0);
+        }
+        client_pool[room_num][0] = client_pool[room_num][1];
+        strcpy(name[room_num][0],name[room_num][1]);
+        for(int i=2;i<MAX_CLIENTS;i++)
+        {
+            if(client_pool[room_num][i]!=0)
+            {
+                snprintf(message,BUF_SIZE,"The host(%s) left the room.\n%s is the new host.\nYou are player #%d now.\n",leave_name,name[room_num][0],i);
+                send(client_pool[room_num][i],message,strlen(message),0);
+            }
+            client_pool[room_num][i-1]=client_pool[room_num][i];
+            strcpy(name[room_num][i-1],name[room_num][i]);
+        }
+        client_pool[room_num][MAX_CLIENTS-1]=0;
+        strcpy(name[room_num][MAX_CLIENTS-1],"");
+    }
+    else
+    {
+        for(int i=0;i<nth;i++)
+        {
+            snprintf(message,BUF_SIZE,"Player #%d(%s) left the room.\n",nth+1,leave_name);
+            send(client_pool[room_num][i],message,strlen(message),0);
+        }
+        for(int i=nth+1;i<MAX_CLIENTS;i++)
+        {
+            if(client_pool[room_num][i]!=0)
+            {
+                snprintf(message,BUF_SIZE,"Player #%d(%s) left the room.\nYou are player #%d now.\n",nth+1,leave_name,i);
+                send(client_pool[room_num][i],message,strlen(message),0);
+            }
+            client_pool[room_num][i-1]=client_pool[room_num][i];
+            strcpy(name[room_num][i-1],name[room_num][i]);
+        }
+        client_pool[room_num][MAX_CLIENTS-1]=0;
+        strcpy(name[room_num][MAX_CLIENTS-1],"");
+    }
 }
 void signal_handler(int sig) {
     while (waitpid(-1, NULL, WNOHANG) > 0)
@@ -319,4 +369,20 @@ int str_to_number(const char *s) {
         return -1;
     }
     return (int)num;
+}
+
+int find_nth(int room_num,int client_fd)
+{
+    if(room_num == -1)
+    {
+        return -1;
+    }
+    for(int i=0;i<MAX_CLIENTS;i++)
+    {
+        if(client_pool[room_num][i]==client_fd)
+        {
+            return i;
+        }
+    }
+    return -1;
 }
