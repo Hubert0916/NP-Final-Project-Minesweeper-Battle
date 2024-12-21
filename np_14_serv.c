@@ -138,13 +138,13 @@ void *handle_client(void *arg) {
 
         buffer[nbytes] = '\0'; // Ensure null-terminated string
         printf("Message from %s: %s", player_name, buffer);
-        strcpy(buffer_copy,buffer);
+        snprintf(buffer_copy,BUF_SIZE,"%s",buffer);
         char *token = strtok(buffer_copy," ");
         if(strcmp(token,"create")==0)
         {
             if(room_num!=-1)
             {
-                snprintf(message,
+                snprintf(message,BUF_SIZE,
                         "You are in room %d now.\nLeave the room before creating new room.\n",
                         room_num);
                 send(client_fd,message,strlen(message),0);
@@ -176,6 +176,7 @@ void *handle_client(void *arg) {
                         if(empty_flag==0)
                         {
                             send(client_fd,used_message,strlen(used_message),0);
+                            room_num = -1;
                         }
                         else
                         {
@@ -195,7 +196,7 @@ void *handle_client(void *arg) {
         {
             if(room_num!=-1)
             {
-                snprintf(message,
+                snprintf(message, BUF_SIZE,
                         "You are in room %d now.\nLeave the room before joining new room.\n",
                         room_num);
                 send(client_fd,message,strlen(message),0);
@@ -231,10 +232,12 @@ void *handle_client(void *arg) {
                         if(empty_flag==1)
                         {
                             send(client_fd,empty_message,strlen(empty_message),0);
+                            room_num = -1;
                         }
                         else if(full_flag==1)
                         {
                             send(client_fd,full_message,strlen(full_message),0);
+                            room_num = -1;
                         }
                         else
                         {
