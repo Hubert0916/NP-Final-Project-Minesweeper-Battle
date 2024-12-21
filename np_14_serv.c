@@ -137,14 +137,13 @@ void *handle_client(void *arg) {
                 nth_player = -1;
             }
             pthread_mutex_unlock(&client_mutex);
-            // Broadcast the leave message to remaining users
             break;
         }
-
-        buffer[nbytes] = '\0'; // Ensure null-terminated string
+        buffer[nbytes] = ' ';
+        buffer[nbytes+1] = '\0'; // Ensure null-terminated string
         printf("Message from %s: %s", player_name, buffer);
         snprintf(buffer_copy,BUF_SIZE,"%s",buffer);
-        char *token = strtok(buffer_copy," ");
+        char *token = strtok(buffer_copy," \n");
         if(strcmp(token,"create")==0)
         {
             if(room_num!=-1)
@@ -156,7 +155,7 @@ void *handle_client(void *arg) {
             }
             else
             {
-                token = strtok(NULL," ");
+                token = strtok(NULL," \n");
                 if(token==NULL)
                 {
                     send(client_fd,create_usage,strlen(create_usage),0);
@@ -208,7 +207,7 @@ void *handle_client(void *arg) {
             }
             else
             {
-                token = strtok(NULL," ");
+                token = strtok(NULL," \n");
                 if(token==NULL)
                 {
                     send(client_fd,join_usage,strlen(join_usage),0);
@@ -268,7 +267,23 @@ void *handle_client(void *arg) {
         }
         else if(strcmp(token,"leave")==0)
         {
-
+            if(room_num==-1)
+            {
+                snprintf(message,BUF_SIZE,"You are not in any room.\n");
+                send(client_fd,message,strlen(message),0);
+            }
+            else
+            {
+                pthread_mutex_lock(&client_mutex);
+                snprintf(message,BUF_SIZE,"You left room #%d.\n",room_num);
+                nth_player = find_nth(room_num,client_fd);
+                // Close client connection and remove from pool
+                leave_broadcast(room_num,nth_player);
+                room_num = -1;
+                nth_player = -1;
+                pthread_mutex_unlock(&client_mutex);
+                send(client_fd,message,strlen(message),0);
+            }
         }
         else if(strcmp(token,"peek")==0)
         {
