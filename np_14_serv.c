@@ -28,6 +28,7 @@ int client_pool[1000][MAX_CLIENTS]; //room num 000-999, max player per room = 4
 int peek[1000][MAX_CLIENTS];
 int pass[1000][MAX_CLIENTS];
 int steal[1000][MAX_CLIENTS];
+int start[1000];
 char create_usage[] = "Usage: create {room_num(0-999)}";
 char join_usage[] = "Usage: join {room_num(0-999)}";
 char used_message[] = "This room number is used, please try another room number or join this room.\n";
@@ -285,6 +286,39 @@ void *handle_client(void *arg) {
                 send(client_fd,message,strlen(message),0);
             }
         }
+        else if(strcmp(token,"start")==0){
+            if(start[room_num] == 0 && nth_player == 0 && client_pool[room_num][1]==0){
+                snprintf(message, BUF_SIZE, "You are the only one player in the room #%d.\n", room_num);
+                send(client_fd,message,strlen(message),0);
+            }
+            else if(start[room_num] == 0 && nth_player == 0 && client_pool[room_num][1]!=0){
+                start[room_num] = 1;
+                pthread_mutex_lock(&client_mutex);
+                snprintf(message,BUF_SIZE,"start\n");
+                start_broadcast(room_num);
+                pthread_mutex_unlock(&client_mutex);
+                send(client_fd,message,strlen(message),0);
+            }
+        }
+        else if(strcmp(token,"quit")==0){
+            if(room_num==-1)
+            {
+                snprintf(message,BUF_SIZE,"You are not in any room.\n");
+                send(client_fd,message,strlen(message),0);
+            }
+            else if(client_pool[room_num][1]==0){
+                start[room_num] = 0;
+            }
+            pthread_mutex_lock(&client_mutex);
+            snprintf(message,BUF_SIZE,"You left room #%d.\n",room_num);
+            nth_player = find_nth(room_num,client_fd);
+            // Close client connection and remove from pool
+            leave_broadcast(room_num,nth_player);
+            room_num = -1;
+            nth_player = -1;
+            pthread_mutex_unlock(&client_mutex);
+            send(client_fd,message,strlen(message),0);
+        }
         else if(strcmp(token,"peek")==0)
         {
 
@@ -306,7 +340,16 @@ void *handle_client(void *arg) {
     return NULL;
 }
 
-
+void start_broadcast(int room_num){
+    char sendline[BUF_SIZE];
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if(client_pool[room_num][i]==0) break;
+        else{
+            snprintf(sendline, BUF_SIZE, "start\n");
+            send(client_pool[room_num][i], sendline, strlen(sendline), 0);
+        }
+    }
+}
 
 void enter_broadcast(int room_num,int assign_num) 
 {
@@ -333,6 +376,9 @@ void leave_broadcast(int room_num,int nth)
         {
             snprintf(message,BUF_SIZE,"The host(%s) left the room.\nYou are the new host(#1) now.\n",leave_name);
             send(client_pool[room_num][1],message,strlen(message),0);
+        }
+        else{
+            start[room_num] = 0;
         }
         client_pool[room_num][0] = client_pool[room_num][1];
         strcpy(name[room_num][0],name[room_num][1]);
