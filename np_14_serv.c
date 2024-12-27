@@ -815,7 +815,7 @@ void *handle_client(void *arg) {
                             }
                             else if(strcmp(token,"pass")==0)
                             {
-                                if(peek[room_num][target_player]==0)
+                                if(pass[room_num][target_player]==0)
                                 {
                                     send(client_fd,"That player doesn't have pass item.\n",BUF_SIZE,0);
                                 }
@@ -826,7 +826,7 @@ void *handle_client(void *arg) {
                             }
                             else if(strcmp(token,"steal")==0)
                             {
-                                if(peek[room_num][target_player]==0)
+                                if(steal[room_num][target_player]==0)
                                 {
                                     send(client_fd,"That player doesn't have steal item.\n",BUF_SIZE,0);
                                 }
