@@ -1,235 +1,132 @@
-#include	"unp.h"
-#include  <string.h>
-#include  <stdio.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
+#include <sys/select.h>
+#include <errno.h>
+#include <unp.h>
+
+#define CLEAR_SCREEN "\033[2J"
+#define MOVE_CURSOR_HOME "\033[H"
+#define TEXT_CYAN "\033[36m"
+#define TEXT_RESET "\033[0m"
 
 char id[MAXLINE];
 
-/* the following two functions use ANSI Escape Sequence */
-/* refer to https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797 */
+void clear_screen() {
+    printf(CLEAR_SCREEN MOVE_CURSOR_HOME);
+    fflush(stdout);
+}
 
+void error_exit(const char *msg) {
+    perror(msg);
+    exit(EXIT_FAILURE);
+}
 
-void clr_scr() {
-	printf("\x1B[2J");
-};
+void print_highlighted(const char *msg) {
+    printf(TEXT_CYAN "%s" TEXT_RESET, msg);
+    fflush(stdout);
+}
 
-void set_scr() {		// set screen to 80 * 25 color mode
-	printf("\x1B[=3h");
-};
+void interact_with_server(int sockfd) {
+    fd_set rset;
+    int maxfd;
+    char sendline[MAXLINE], recvline[MAXLINE];
 
-void game_start(FILE *fp, int sockfd){
-	int pipe_c_to_py[2]; // parent -> child
-	int       stdineof, peer_exit, n;
-    char      sendline[MAXLINE], recvline[MAXLINE];
-	stdineof = 0;
-	peer_exit = 0;
+    clear_screen();
+    printf("Connecting to the server...\n");
 
-	// scanf("%s", recvline)
-
-    if (pipe(pipe_c_to_py) == -1) {
-        perror("pipe");
-        exit(EXIT_FAILURE);
+    // Send player ID to server
+    if (write(sockfd, id, strlen(id)) < 0) {
+        error_exit("write error");
     }
 
-    pid_t pid = fork();
-    if (pid == -1) {
-        perror("fork");
-        exit(EXIT_FAILURE);
+    // Wait for server acknowledgment
+    int n = read(sockfd, recvline, MAXLINE);
+    if (n <= 0) {
+        error_exit("Server connection error");
     }
+    recvline[n] = '\0';
+    print_highlighted(recvline);
 
-    if (pid == 0) {
-        // child exec game
-        close(pipe_c_to_py[1]);
+    for (;;) {
+        FD_ZERO(&rset);
+        FD_SET(STDIN_FILENO, &rset);
+        FD_SET(sockfd, &rset);
+        maxfd = sockfd > STDIN_FILENO ? sockfd : STDIN_FILENO;
 
-        // connect pipe
-        dup2(pipe_c_to_py[0], STDIN_FILENO);
+        // Monitor inputs from both server and stdin
+        if (select(maxfd + 1, &rset, NULL, NULL, NULL) < 0) {
+            if (errno == EINTR) continue;
+            error_exit("select error");
+        }
 
-        execlp("python3", "python3", "game.py", "--num", "10", NULL);
-        perror("execlp");
-        exit(EXIT_FAILURE);
-    } else {
-        // parent
-        close(pipe_c_to_py[0]);
-
-        fd_set rset;
-        char buffer[MAXLINE];
-
-        while (1) {
-            FD_ZERO(&rset);
-
-            FD_SET(STDIN_FILENO, &rset);
-			int maxfdp = STDIN_FILENO;
-			if (stdineof == 0) {
-				FD_SET(fileno(fp), &rset);
-				if (fileno(fp) > maxfdp)
-					maxfdp = fileno(fp);
-			};	
-			if (peer_exit == 0) {
-				FD_SET(sockfd, &rset);
-				if (sockfd > maxfdp)
-					maxfdp = sockfd;
-			};
-
-            struct timeval timeout = {1, 0};            
-
-            int ready = select(maxfdp + 1, &rset, NULL, NULL, &timeout);
-            if (ready == -1) {
-                perror("select");
+        // Check for server messages
+        if (FD_ISSET(sockfd, &rset)) {
+            n = read(sockfd, recvline, MAXLINE);
+            if (n <= 0) {
+                printf("Server disconnected. Exiting...\n");
                 break;
-            } else if (ready == 0) {
-                continue;
             }
-
-			if (FD_ISSET(sockfd, &rset)) {  /* socket is readable */
-				n = read(sockfd, recvline, MAXLINE);
-				if (n == 0) {
-					if (stdineof == 1)
-						return;         /* normal termination */
-					else {
-						kill(pid, SIGTERM);
-						wait(NULL);
-						// printf("(End of input from the peer!)\n");
-						peer_exit = 1;
-						return;
-					};
-				}
-				else if (n > 0) {
-					recvline[n] = '\0';
-					printf("\x1B[0;36m%s\x1B[0m", recvline);
-					fflush(stdout);
-				}
-				else { // n < 0
-					kill(pid, SIGTERM);
-					wait(NULL);
-					// printf("(server down)\n");
-					return;
-				};
-			}
-
-            // read from stdin
-            if (FD_ISSET(STDIN_FILENO, &rset)) {
-                ssize_t bytes_read = read(STDIN_FILENO, buffer, sizeof(buffer) - 1);
-                if (bytes_read > 0) {
-                    buffer[bytes_read] = '\0';
-					if(strncmp(buffer, "quit", 4) == 0){
-						write(pipe_c_to_py[1], buffer, bytes_read); // 将输入发送到子进程
-						Writen(sockfd, buffer, bytes_read+1);			
-						return;
-					}
-					else{
-						write(pipe_c_to_py[1], buffer, bytes_read); // 将输入发送到子进程
-					}                    
-                } else if (bytes_read < 0 && errno != EAGAIN) {
-                    perror("read stdin");
-                }
+            recvline[n] = '\0';
+            if (strncmp(recvline, "start", 5) == 0) {
+                print_highlighted("\nGame starting...\n");
+            } else {
+                print_highlighted(recvline);
             }
         }
 
-        close(pipe_c_to_py[1]);
-        wait(NULL);
+        // Check for user input
+        if (FD_ISSET(STDIN_FILENO, &rset)) {
+            if (fgets(sendline, MAXLINE, stdin) == NULL) {
+                printf("Exiting...\n");
+                break;
+            }
+            if (write(sockfd, sendline, strlen(sendline)) < 0) {
+                error_exit("write error");
+            }
+        }
     }
 }
 
-void xchg_data(FILE *fp, int sockfd)
-{
-    int       maxfdp1, stdineof, peer_exit, n;
-    fd_set    rset;
-    char      sendline[MAXLINE], recvline[MAXLINE];
-	
-	set_scr();
-	clr_scr();
-    Writen(sockfd, id, strlen(id));
-    printf("sent: %s\n", id);
-	readline(sockfd, recvline, MAXLINE);
-	printf("recv: %s", recvline);
-	readline(sockfd, recvline, MAXLINE);
-	printf("recv: %s", recvline);	
-    stdineof = 0;
-	peer_exit = 0;
+int main(int argc, char **argv) {
+    int sockfd;
+    struct sockaddr_in servaddr;
 
-    for ( ; ; ) {
-		FD_ZERO(&rset);
-		maxfdp1 = 0;
-        if (stdineof == 0) {
-            FD_SET(fileno(fp), &rset);
-			maxfdp1 = fileno(fp);
-		};	
-		if (peer_exit == 0) {
-			FD_SET(sockfd, &rset);
-			if (sockfd > maxfdp1)
-				maxfdp1 = sockfd;
-		};
-        maxfdp1++;
-        Select(maxfdp1, &rset, NULL, NULL, NULL);
-		if (FD_ISSET(sockfd, &rset)) {  /* socket is readable */
-			n = read(sockfd, recvline, MAXLINE);
-			if (n == 0) {
- 		   		if (stdineof == 1)
-                    return;         /* normal termination */
-		   		else {
-					printf("\n(End of input from the peer!)\n");
-					peer_exit = 1;
-					return;
-				};
-            }
-			else if (n > 0) {
-				recvline[n] = '\0';
-				if(strncmp(recvline, "start", 5) == 0){
-					game_start(fp, sockfd);
-				}
-				else{
-					printf("\x1B[0;36m%s\x1B[0m", recvline);
-					fflush(stdout);
-				}			
-			}
-			else { // n < 0
-			    printf("\n(server down)\n");
-				return;
-			};
-        }
-		
-        if (FD_ISSET(fileno(fp), &rset)) {  /* input is readable */
-
-            if (Fgets(sendline, MAXLINE, fp) == NULL) {
-				if (peer_exit)
-					return;
-				else {
-					printf("(leaving...)\n");
-					stdineof = 1;
-					Shutdown(sockfd, SHUT_WR);      /* send FIN */
-				};
-            }
-			else {
-				n = strlen(sendline);
-				sendline[n] = '\n';
-				Writen(sockfd, sendline, n+1);
-			};
-        }
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <IPaddress> <ID>\n", argv[0]);
+        exit(EXIT_FAILURE);
     }
-};
 
-int
-main(int argc, char **argv)
-{
-	int					sockfd;
-	struct sockaddr_in	servaddr;
+    // Copy player ID
+    strncpy(id, argv[2], MAXLINE);
 
-	if (argc != 3)
-		err_quit("usage: tcpcli <IPaddress> <ID>");
+    // Create socket
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        error_exit("Socket creation failed");
+    }
 
-	sockfd = Socket(AF_INET, SOCK_STREAM, 0);
+    // Set up server address
+    memset(&servaddr, 0, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(SERV_PORT);
 
-	bzero(&servaddr, sizeof(servaddr));
-	servaddr.sin_family = AF_INET;
-	servaddr.sin_port = htons(SERV_PORT);
-    printf("%d\n",SERV_PORT);
-	Inet_pton(AF_INET, argv[1], &servaddr.sin_addr);
-	strcpy(id, argv[2]);
+    if (inet_pton(AF_INET, argv[1], &servaddr.sin_addr) <= 0) {
+        error_exit("Invalid IP address");
+    }
 
-	Connect(sockfd, (SA *) &servaddr, sizeof(servaddr));
+    // Connect to server
+    if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+        error_exit("Connection to server failed");
+    }
 
-	xchg_data(stdin, sockfd);		/* do it all */
+    // Interact with server
+    interact_with_server(sockfd);
 
-	exit(0);
+    // Close connection
+    close(sockfd);
+    return 0;
 }
+
