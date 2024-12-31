@@ -167,7 +167,6 @@ void *handle_client(void *arg) {
 
     while (1) {
         int nbytes = recv(client_fd, buffer, BUF_SIZE, 0);
-	printf("nbyte: %d\n", nbytes);
         if (nbytes <= 0) {
             // Notify the leaving user
             send(client_fd, "Bye!\n", 5, 0);
