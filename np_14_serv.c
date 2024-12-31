@@ -12,6 +12,12 @@
 #define BACKLOG 1024     // Maximum number of pending connections
 #define BUF_SIZE 1024  // Buffer size for messages
 #define MAX_CLIENTS 4 // Maximum number of clients
+#define TEXT_GREEN "\033[32m"
+#define TEXT_YELLOW "\033[33m"
+#define TEXT_BLUE "\033[34m"
+#define TEXT_BOLD "\033[1m"
+#define TEXT_UNDERLINE "\033[4m"
+#define RESET_FORMAT "\033[0m"
 
 typedef struct {
     int client_fd;
@@ -21,6 +27,9 @@ void *handle_client(void* args);
 void broadcast_message(int sender_fd, const char *message, int message_len);
 void enter_broadcast(int room_num,int assign_num);
 void signal_handler(int sig);
+int find_nth(int room_num, int client_fd);
+void leave_broadcast(int room_num, int nth_player);
+int str_to_number(const char *token);
 
 // Shared variables
 int game_round[1000];
@@ -37,18 +46,32 @@ int steal[1000][MAX_CLIENTS];
 int main_board[1000][22][22];//0: safe, 1: mine
 int player_board[1000][MAX_CLIENTS][22][22];
 //-1: unknown, 0~8: 0~8 mines nearby, 10~18: 0~8 mines nearby (peek), 100: mine (step), 200: mine (peek), 20: flag
-char create_usage[] = "Usage: create {room_num(0-999)}\n";
-char join_usage[] = "Usage: join {room_num(0-999)}\n";
-char set_usage[] = "Usage: set {row num(1-20)} {col num(1-20)} {mine num}\n";
-char step_usage[] = "Usage: step {row} {col}\n";
-char range_message[] = "Out of range!\n";
-char used_message[] = "This room number is used, please try another room number or join this room.\n";
-char empty_message[] = "This room hasn't been create, please try another room number or create this room.\n";
-char full_message[] = "This room is full, please try another room number\n";
-char peek_usage[] = "Usage: peek {row num} {col num}\n";
-char steal_usage[] = "Usage: steal {player num} {peek/pass/steal}\n";
-char flag_usage[] = "Usage: flag {row num} {col num}\n";
-char help_message[] = "leave\ncreate {room_num(0-999)}\njoin {room_num(0-999)\nset {row num(1-20)} {col num(1-20)} {mine num}\nready\ncancel\nstart\nstep {row} {col}\nflag {row num} {col num}\npeek {row num} {col num}\npass\nsteal {player num} {peek/pass/steal}\nhelp\n";
+char create_usage[] = "Usage: create {room_num(0-999)}\n\n";
+char join_usage[] = "Usage: join {room_num(0-999)}\n\n";
+char set_usage[] = "Usage: set {row num(1-20)} {col num(1-20)} {mine num}\n\n";
+char step_usage[] = "Usage: step {row} {col}\n\n";
+char range_message[] = "Out of range!\n\n";
+char used_message[] = "This room number is used, please try another room number or join this room.\n\n";
+char empty_message[] = "This room hasn't been create, please try another room number or create this room.\n\n";
+char full_message[] = "This room is full, please try another room number\n\n";
+char peek_usage[] = "Usage: peek {row num} {col num}\n\n";
+char steal_usage[] = "Usage: steal {player num} {peek/pass/steal}\n\n";
+char flag_usage[] = "Usage: flag {row num} {col num}\n\n";
+char help_message[] =
+    "\033[1m\033[4mAvailable Commands:\033[0m\n"  // Bold and Underlined
+    "\033[32mhelp           \033[0m- Show this help menu.\n"
+    "\033[32mleave          \033[0m- Leave the current room.\n"
+    "\033[32mcreate {room_num(0-999)} \033[0m- Create a new room (0-999).\n"
+    "\033[32mjoin {room_num(0-999)}   \033[0m- Join an existing room (0-999).\n"
+    "\033[32mset {row num(1-20)} {col num(1-20)} {mine num} \033[0m- Configure the game board.\n"
+    "\033[32mready          \033[0m- Mark yourself as ready.\n"
+    "\033[32mcancel         \033[0m- Cancel ready status.\n"
+    "\033[32mstart          \033[0m- Start the game (host only).\n"
+    "\033[32mstep {row} {col} \033[0m- Uncover a cell.\n"
+    "\033[32mflag {row} {col} \033[0m- Place a flag on a cell.\n"
+    "\033[32mpeek {row} {col} \033[0m- Use a peek item.\n"
+    "\033[32mpass           \033[0m- Skip your turn.\n"
+    "\033[32msteal {player num} {peek/pass/steal} \033[0m- Steal an item from another player.\n\n";
 pthread_mutex_t client_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int main() {
@@ -134,10 +157,17 @@ void *handle_client(void *arg) {
     char message[BUF_SIZE];
     int empty_flag;
     int full_flag;
-    snprintf(buffer,BUF_SIZE,"Welcome to minesweeper battle!\nPlease create or join a room\n");
+	snprintf(buffer, BUF_SIZE,
+             "\033[1m\033[34m=====================================\n"  // Bold Blue
+             "   Welcome to Minesweeper Battle!\n"
+             "=====================================\n\n\033[0m"  // Reset Format
+             "\033[33mPlease create or join a room to start playing.\n\n\033[0m");  // Yellow
     send(client_fd, buffer, strlen(buffer), 0);
+
+
     while (1) {
         int nbytes = recv(client_fd, buffer, BUF_SIZE, 0);
+	printf("nbyte: %d\n", nbytes);
         if (nbytes <= 0) {
             // Notify the leaving user
             send(client_fd, "Bye!\n", 5, 0);
@@ -161,12 +191,16 @@ void *handle_client(void *arg) {
         printf("Message from %s: %s", player_name, buffer);
         snprintf(buffer_copy,BUF_SIZE,"%s",buffer);
         char *token = strtok(buffer_copy," \n");
+	
+	if (token == NULL)
+            continue;
+
         if(strcmp(token,"create")==0)
         {
             if(room_num!=-1)
             {
                 snprintf(message,BUF_SIZE,
-                        "You are in room %d now.\nLeave the room before creating new room.\n",
+                        "You are in room %d now.\nLeave the room before creating new room.\n\n",
                         room_num);
                 send(client_fd,message,strlen(message),0);
             }
@@ -207,7 +241,7 @@ void *handle_client(void *arg) {
                             client_pool[room_num][0]=client_fd;
                             strcpy(name[room_num][0],player_name);
                             snprintf(message,BUF_SIZE,
-                                    "Welcome to room %d.\nYou are the host(#1) of this room.\n",
+                                    "Welcome to room %d.\nYou are the host(#1) of this room.\n\n",
                                     room_num);
                             send(client_fd,message,strlen(message),0);
                             row_num[room_num]=6;
@@ -223,7 +257,7 @@ void *handle_client(void *arg) {
             if(room_num!=-1)
             {
                 snprintf(message, BUF_SIZE,
-                        "You are in room %d now.\nLeave the room before joining new room.\n",
+                        "You are in room %d now.\nLeave the room before joining new room.\n\n",
                         room_num);
                 send(client_fd,message,strlen(message),0);
             }
@@ -279,7 +313,7 @@ void *handle_client(void *arg) {
                             strcpy(name[room_num][nth_player],player_name);
                             enter_broadcast(room_num,nth_player);
                             snprintf(message,BUF_SIZE,
-                                    "Welcome to room %d.\nYou are player #%d of this room.\n",
+                                    "Welcome to room %d.\nYou are player #%d of this room.\n\n",
                                     room_num,nth_player+1);
                             send(client_fd,message,strlen(message),0);
                             if(start_flag[room_num]==0)
@@ -290,7 +324,7 @@ void *handle_client(void *arg) {
                             {
                                 status[room_num][nth_player] = 1;
                                 snprintf(message,BUF_SIZE,
-                                        "The host has started the game.\nYou are the spectator now.\n");
+                                        "The host has started the game.\nYou are the spectator now.\n\n");
                                 send(client_fd,message,strlen(message),0);
                             }
                         }
@@ -302,13 +336,13 @@ void *handle_client(void *arg) {
         {
             if(room_num==-1)
             {
-                snprintf(message,BUF_SIZE,"You are not in any room.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\n\n");
                 send(client_fd,message,strlen(message),0);
             }
             else
             {
                 pthread_mutex_lock(&client_mutex);
-                snprintf(message,BUF_SIZE,"You left room #%d.\n",room_num);
+                snprintf(message,BUF_SIZE,"You left room #%d.\n\n",room_num);
                 nth_player = find_nth(room_num,client_fd);
                 int temp_room_num = room_num;
                 // Close client connection and remove from pool
@@ -327,13 +361,13 @@ void *handle_client(void *arg) {
                             status[temp_room_num][i]=4;
                             if(i==winner)
                             {
-                                snprintf(message,BUF_SIZE,"You are the last survivor.\nYou win!\n");
+                                snprintf(message,BUF_SIZE,"You are the last survivor.\nYou win!\n\n");
                                 send(client_pool[temp_room_num][i],message,strlen(message),0);
                                 start_flag[temp_room_num]=0;
                             }
                             else
                             {
-                                snprintf(message,BUF_SIZE,"Player #%d (%s) win!\n",winner+1,name[temp_room_num][winner]);
+                                snprintf(message,BUF_SIZE,"Player #%d (%s) win!\n\n",winner+1,name[temp_room_num][winner]);
                                 send(client_pool[temp_room_num][i],message,strlen(message),0);
                             }
                         }
@@ -347,14 +381,14 @@ void *handle_client(void *arg) {
             nth_player = find_nth(room_num,client_fd);
             if(room_num==-1)
             {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n\n");
                 send(client_fd,message,strlen(message),0);
             }
             else
             {
                 if(start_flag[room_num]==1)
                 {
-                    snprintf(message,BUF_SIZE,"The host has started the game.\n");
+                    snprintf(message,BUF_SIZE,"The host has started the game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else
@@ -368,14 +402,14 @@ void *handle_client(void *arg) {
             nth_player = find_nth(room_num,client_fd);
             if(room_num==-1)
             {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n\n");
                 send(client_fd,message,strlen(message),0);
             }
             else
             {
                 if(start_flag[room_num]==1)
                 {
-                    snprintf(message,BUF_SIZE,"The host has started the game.\n");
+                    snprintf(message,BUF_SIZE,"The host has started the game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else
@@ -393,25 +427,25 @@ void *handle_client(void *arg) {
             nth_player = find_nth(room_num,client_fd);
             if(room_num==-1)
             {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate a room to become a host.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate a room to become a host.\n\n");
                 send(client_fd,message,strlen(message),0);
             }
             else
             {
                 if(nth_player != 0)
                 {
-                    snprintf(message,BUF_SIZE,"Only the host can start the game.\n");
+                    snprintf(message,BUF_SIZE,"Only the host can start the game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(start_flag[room_num]==1)
                 {
-                    snprintf(message,BUF_SIZE,"You have started the game.\n");
+                    snprintf(message,BUF_SIZE,"You have started the game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(check_ready(room_num)<2)
                 {
                     printf("ready: %d\n",check_ready(room_num));
-                    snprintf(message,BUF_SIZE,"A game requires at least 2 players.\n");
+                    snprintf(message,BUF_SIZE,"A game requires at least 2 players.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else
@@ -423,7 +457,7 @@ void *handle_client(void *arg) {
                         if(status[room_num][i]==3)
                         {
                             status[room_num][i]=2;
-                            snprintf(message,BUF_SIZE,"GAME START!\nYou are a player.\n");
+                            snprintf(message,BUF_SIZE,"GAME START!\nYou are a player.\n\n");
                             send(client_pool[room_num][i],message,strlen(message),0);
                             peek[room_num][i]=0;
                             steal[room_num][i]=0;
@@ -432,7 +466,7 @@ void *handle_client(void *arg) {
                         else if(status[room_num][i]==4)
                         {
                             status[room_num][i]=1;
-                            snprintf(message,BUF_SIZE,"GAME START!\nYou are a spectator.\n");
+                            snprintf(message,BUF_SIZE,"GAME START!\nYou are a spectator.\n\n");
                             send(client_pool[room_num][i],message,strlen(message),0);
                         }
                     }
@@ -456,12 +490,12 @@ void *handle_client(void *arg) {
             nth_player = find_nth(room_num,client_fd);
             if(room_num==-1)
             {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate a room to become a host.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate a room to become a host.\n\n");
                 send(client_fd,message,strlen(message),0);
             }
             else if(nth_player!=0)
             {
-                snprintf(message,BUF_SIZE,"Only the host can set the board.\n");
+                snprintf(message,BUF_SIZE,"Only the host can set the board.\n\n");
                 send(client_fd,message,strlen(message),0);
             }
             else
@@ -508,7 +542,7 @@ void *handle_client(void *arg) {
                                     }
                                     else if(temp_mine>temp_row*temp_col)
                                     {
-                                        snprintf(message,BUF_SIZE,"Too many mines!\n");
+                                        snprintf(message,BUF_SIZE,"Too many mines!\n\n");
                                         send(client_fd,message,strlen(message),0);
                                     }
                                     else
@@ -528,7 +562,7 @@ void *handle_client(void *arg) {
         {
              if(room_num==-1)
              {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n\n");
                 send(client_fd,message,strlen(message),0);
              }
              else
@@ -536,17 +570,17 @@ void *handle_client(void *arg) {
                 nth_player = find_nth(room_num,client_fd);
                 if(status[room_num][nth_player]==3||status[room_num][nth_player]==4)
                 {
-                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n");
+                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(status[room_num][nth_player]!=2)
                 {
-                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n");
+                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(nth_player!=game_round[room_num])
                 {
-                    snprintf(message,BUF_SIZE,"It's not your turn yet.\n");
+                    snprintf(message,BUF_SIZE,"It's not your turn yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else
@@ -583,7 +617,7 @@ void *handle_client(void *arg) {
                                         player_board[room_num][nth_player][step_row][step_col]<=8)||
                                         player_board[room_num][nth_player][step_row][step_col]==100)
                                     {
-                                        snprintf(message,BUF_SIZE,"This block is stepped.\n");
+                                        snprintf(message,BUF_SIZE,"This block is stepped.\n\n");
                                         send(client_fd,message,strlen(message),0);
                                     }
                                     else
@@ -620,7 +654,7 @@ void *handle_client(void *arg) {
         {
              if(room_num==-1)
              {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n\n");
                 send(client_fd,message,strlen(message),0);
              }
              else
@@ -628,22 +662,22 @@ void *handle_client(void *arg) {
                 nth_player = find_nth(room_num,client_fd);
                 if(status[room_num][nth_player]==3||status[room_num][nth_player]==4)
                 {
-                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n");
+                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(status[room_num][nth_player]!=2)
                 {
-                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n");
+                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(nth_player!=game_round[room_num])
                 {
-                    snprintf(message,BUF_SIZE,"It's not your turn yet.\n");
+                    snprintf(message,BUF_SIZE,"It's not your turn yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(peek[room_num][nth_player]==0)
                 {
-                    snprintf(message,BUF_SIZE,"You don't have any peek item.\n");
+                    snprintf(message,BUF_SIZE,"You don't have any peek item.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else
@@ -683,7 +717,7 @@ void *handle_client(void *arg) {
                                         player_board[room_num][nth_player][peek_row][peek_col]==100||
                                         player_board[room_num][nth_player][peek_row][peek_col]==200)
                                     {
-                                        snprintf(message,BUF_SIZE,"This block is not unknown.\n");
+                                        snprintf(message,BUF_SIZE,"This block is not unknown.\n\n");
                                         send(client_fd,message,strlen(message),0);
                                     }
                                     else
@@ -703,7 +737,7 @@ void *handle_client(void *arg) {
         {
              if(room_num==-1)
              {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n\n");
                 send(client_fd,message,strlen(message),0);
              }
              else
@@ -711,22 +745,22 @@ void *handle_client(void *arg) {
                 nth_player = find_nth(room_num,client_fd);
                 if(status[room_num][nth_player]==3||status[room_num][nth_player]==4)
                 {
-                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n");
+                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(status[room_num][nth_player]!=2)
                 {
-                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n");
+                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(nth_player!=game_round[room_num])
                 {
-                    snprintf(message,BUF_SIZE,"It's not your turn yet.\n");
+                    snprintf(message,BUF_SIZE,"It's not your turn yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(pass[room_num][nth_player]==0)
                 {
-                    snprintf(message,BUF_SIZE,"You don't have any pass item.\n");
+                    snprintf(message,BUF_SIZE,"You don't have any pass item.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else
@@ -754,7 +788,7 @@ void *handle_client(void *arg) {
         {
             if(room_num==-1)
              {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n\n");
                 send(client_fd,message,strlen(message),0);
              }
              else
@@ -762,22 +796,22 @@ void *handle_client(void *arg) {
                 nth_player = find_nth(room_num,client_fd);
                 if(status[room_num][nth_player]==3||status[room_num][nth_player]==4)
                 {
-                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n");
+                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(status[room_num][nth_player]!=2)
                 {
-                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n");
+                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(nth_player!=game_round[room_num])
                 {
-                    snprintf(message,BUF_SIZE,"It's not your turn yet.\n");
+                    snprintf(message,BUF_SIZE,"It's not your turn yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(steal[room_num][nth_player]==0)
                 {
-                    snprintf(message,BUF_SIZE,"You don't have any steal item.\n");
+                    snprintf(message,BUF_SIZE,"You don't have any steal item.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else
@@ -806,7 +840,7 @@ void *handle_client(void *arg) {
                             {
                                 if(peek[room_num][target_player]==0)
                                 {
-                                    send(client_fd,"That player doesn't have peek item.\n",BUF_SIZE,0);
+                                    send(client_fd,"That player doesn't have peek item.\n\n",BUF_SIZE,0);
                                 }
                                 else
                                 {
@@ -817,7 +851,7 @@ void *handle_client(void *arg) {
                             {
                                 if(pass[room_num][target_player]==0)
                                 {
-                                    send(client_fd,"That player doesn't have pass item.\n",BUF_SIZE,0);
+                                    send(client_fd,"That player doesn't have pass item.\n\n",BUF_SIZE,0);
                                 }
                                 else
                                 {
@@ -828,7 +862,7 @@ void *handle_client(void *arg) {
                             {
                                 if(steal[room_num][target_player]==0)
                                 {
-                                    send(client_fd,"That player doesn't have steal item.\n",BUF_SIZE,0);
+                                    send(client_fd,"That player doesn't have steal item.\n\n",BUF_SIZE,0);
                                 }
                                 else
                                 {
@@ -848,7 +882,7 @@ void *handle_client(void *arg) {
         {
              if(room_num==-1)
              {
-                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n");
+                snprintf(message,BUF_SIZE,"You are not in any room.\nCreate or join a room to become a player.\n\n");
                 send(client_fd,message,strlen(message),0);
              }
              else
@@ -856,12 +890,12 @@ void *handle_client(void *arg) {
                 nth_player = find_nth(room_num,client_fd);
                 if(status[room_num][nth_player]==3||status[room_num][nth_player]==4)
                 {
-                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n");
+                    snprintf(message,BUF_SIZE,"The game hasn't started yet.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else if(status[room_num][nth_player]!=2)
                 {
-                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n");
+                    snprintf(message,BUF_SIZE,"You are not the player in this game.\n\n");
                     send(client_fd,message,strlen(message),0);
                 }
                 else
@@ -906,7 +940,7 @@ void *handle_client(void *arg) {
                                     }
                                     else
                                     {
-                                        send(client_fd,"You can't put the falg on the known block.\n",BUF_SIZE,0);
+                                        send(client_fd,"You can't put the falg on the known block.\n\n",BUF_SIZE,0);
                                     }
                                 }
                             }
@@ -920,7 +954,7 @@ void *handle_client(void *arg) {
             send(client_fd,help_message,strlen(help_message),0);
         }
     }
-
+	
     return NULL;
 }
 
