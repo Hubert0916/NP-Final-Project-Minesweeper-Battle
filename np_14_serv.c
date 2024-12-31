@@ -38,7 +38,7 @@ int main_board[1000][22][22];//0: safe, 1: mine
 int player_board[1000][MAX_CLIENTS][22][22];
 //-1: unknown, 0~8: 0~8 mines nearby, 10~18: 0~8 mines nearby (peek), 100: mine (step), 200: mine (peek), 20: flag
 char create_usage[] = "Usage: create {room_num(0-999)}\n";
-char join_usage[] = "Usage: join {room_num(0-999)}";
+char join_usage[] = "Usage: join {room_num(0-999)}\n";
 char set_usage[] = "Usage: set {row num(1-20)} {col num(1-20)} {mine num}\n";
 char step_usage[] = "Usage: step {row} {col}\n";
 char range_message[] = "Out of range!\n";
