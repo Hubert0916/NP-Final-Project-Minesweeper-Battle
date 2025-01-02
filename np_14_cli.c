@@ -12,7 +12,6 @@
 #define MOVE_CURSOR_HOME "\033[H"
 #define TEXT_CYAN "\033[36m"
 #define TEXT_RESET "\033[0m"
-#define INPUT_PROMPT "\033[1;34m>> \033[0m"
 
 char id[MAXLINE];
 
